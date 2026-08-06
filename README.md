@@ -37,7 +37,7 @@
 
 2. **Установите зависимости и браузерные бинарники:**
    ```bash
-   pip install playwright
+   pip install camoufox
    playwright install chromium
    ```
 
