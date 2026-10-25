@@ -1,53 +1,103 @@
-# 🛒 Wildberries Advanced Two-Stage Data Pipeline
+# Wildberries Parser (two-stage)
 
-Высокоэффективный двухэтапный парсер маркетплейса Wildberries на базе асинхронного движка `playwright` и базы данных `SQLite3`. 
+A scraper for the Wildberries marketplace that collects product data and exports it to SQLite in two steps.
 
-Проект реализует продвинутую архитектуру **Network Interception (перехват сетевых запросов)**. Вместо нестабильного парсинга HTML-верстки (которая часто меняется), скрипты имитируют поведение реального браузера, перехватывают внутренние API-ответы серверов Wildberries в формате JSON и извлекают структурированную информацию со 100% точностью.
+The main idea is to read the site's own JSON responses instead of parsing HTML. Wildberries changes its markup often, but the internal API stays stable, so the parser hooks into the browser's network traffic and takes structured data directly from there.
 
-## 🏗 Архитектура конвейера (Pipeline)
+Both stages use [Camoufox](https://camoufox.com), a hardened Firefox build with anti-detect patches, so the requests look like a real browser session.
 
-Парсинг разделен на два изолированных этапа для оптимизации скорости работы и обхода лимитов:
+## How it works
 
-1. **Этап 1: Сбор поисковой выдачи (`main.py`)**  
-   Имитирует поиск по ключевому слову (например, *"люстры"*), перехватывает API-запрос `exactmatch`, собирает первые карточки товаров, вычисляет реальную цену с учетом скидок и сохраняет базовые данные (артикул, название, бренд, цену, ссылку) в локальную реляционную базу данных `SQLite3` с флагом `UNIQUE` для защиты от дубликатов.
-   
-2. **Этап 2: Глубокое обогащение данных (`card.py`)**  
-   Считывает артикул из базы данных, открывает страницу конкретного товара, перехватывает защищенный API-ответ `card.json` и вытаскивает из него глубокие метаданные: подробное описание, технические характеристики (`options`), категорию (`subj_name`) и состав (`contents`).
+**Stage 1 — search results (`main.py`)**
 
-## 🛠 Ключевые фичи
+1. Asks for a search keyword (for example `chandeliers`).
+2. Opens the Wildberries search page in a headless browser.
+3. Intercepts the `exactmatch` API response.
+4. Takes the first 5 products, calculates the real price from the `sizes` data (price comes in kopecks, so it is divided by 100).
+5. Saves article id, name, brand, price and product link to the `wb` table.
 
-* **Парсинг через внутреннее API (XHR/Fetch)**: Перехват сырых JSON-данных напрямую от серверов WB, минуя необходимость рендерить и парсить тяжелый HTML.
-* **Асинхронность (`asyncio` + `playwright`)**: Быстрая инициализация headless-браузера Chromium, минимизирующая потребление оперативной памяти сервера.
-* **Data Persistence (Сохранение состояния)**: База данных SQLite3 выступает в роли связующего звена между этапами, позволяя останавливать и возобновлять парсинг в любой момент без потери данных.
+**Stage 2 — product details (`card.py`)**
 
-## 🧰 Стек технологий
+1. Reads every article from the `wb` table.
+2. Opens the product page for each article.
+3. Intercepts the `card.json` response.
+4. Extracts description, characteristics (`options`), category (`subj_name`) and package contents (`contents`).
+5. Saves everything to the `details` table, linked to `wb` by article id.
 
-* **Language:** Python 3.11+
-* **Automation Engines:** playwright (Chromium Async API)
-* **Database:** SQLite3
-* **Data Format:** JSON Processing
+Because the database sits between the two stages, you can stop after stage 1, review the data, and run stage 2 later or in batches.
 
-## 🚀 Инструкция по запуску
+## Database
 
-1. **Клонируйте репозиторий:**
-   ```bash
-   git clone https://github.com/MoFeed63/wildberries-parser
-   cd wildberries-two-stage-parser
-   ```
+```
+wb
+  article   INTEGER PRIMARY KEY  (UNIQUE)
+  name      TEXT UNIQUE
+  brand     TEXT
+  price     REAL
+  link      TEXT
 
-2. **Установите зависимости и браузерные бинарники:**
-   ```bash
-   pip install camoufox playwright
-   python -m camoufox fetch
-   ```
+details
+  article     INTEGER PRIMARY KEY -> wb.article ON DELETE CASCADE
+  name        TEXT UNIQUE
+  brand       TEXT
+  description TEXT
+  options     TEXT   (JSON array as a string)
+  subj_name   TEXT
+  contents    TEXT
+  price       REAL
+```
 
-3. **Запустите первый этап (сбор выдачи):**
-   ```bash
-   python main.py
-   ```
-   *После этого в корне проекта появится база данных `wb.db`.*
+`INSERT OR IGNORE` plus the `UNIQUE` constraint on article id makes repeated runs safe: duplicates are skipped, not added twice.
 
-4. **Запустите второй этап (глубокий анализ карточки):**
-   ```bash
-   python card.py
-   ```
+## Tech stack
+
+- Python 3.11+
+- Camoufox (async API) — headless browser with anti-detect patches
+- Playwright-compatible page API — navigation, response interception
+- SQLite3 — storage between stages
+
+## Installation
+
+```bash
+git clone https://github.com/MoFeed63/wildberries-parser
+cd wildberries-parser
+
+pip install camoufox playwright
+python -m camoufox fetch
+```
+
+`camoufox fetch` downloads the browser binary, it is required before the first run.
+
+## Usage
+
+Stage 1:
+
+```bash
+python main.py
+# Enter search keyword: chandeliers
+```
+
+`wb.db` is created in the project folder.
+
+Stage 2:
+
+```bash
+python card.py
+```
+
+## What can be changed for a specific task
+
+- Number of products per query — `products[:5]` in `main.py`
+- Output format — currently SQLite, easy to add CSV or Excel export
+- Search by category or seller instead of a keyword
+- Price history collection if the script is scheduled with cron
+- Captcha handling and proxy rotation for large volumes
+
+## Notes
+
+- Wildberries limits request rate, so long runs are better split into batches with pauses.
+- The parser is sensitive to changes in the internal API, not to page layout. If a field disappears, check the intercepted JSON first.
+
+## License
+
+Not specified yet.

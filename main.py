@@ -1,9 +1,8 @@
-import sqlite3
-import os
-from camoufox.async_api import AsyncCamoufox
-from playwright_stealth import stealth
 import asyncio
+import os
+import sqlite3
 
+from camoufox.async_api import AsyncCamoufox
 
 BD_PATH = os.path.join(os.path.dirname(__file__), "wb.db")
 
@@ -54,7 +53,7 @@ async def main():
                     result.append({
                         "article": p.get("id"),
                         "name": p.get("name"),
-                        "barnd": p.get("brand"),
+                        "brand": p.get("brand"),
                         "price": price.get("product", 0) / 100,
                         "link": f"https://www.wildberries.ru/catalog/{p.get("id")}/detail.aspx"
                         
